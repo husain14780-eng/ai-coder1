@@ -40,7 +40,7 @@ jobs:
           SETTINGS="$(find "$GITHUB_WORKSPACE/_gameforge" -type f \( -name settings.gradle.kts -o -name settings.gradle \) -print -quit || true)"
           if [[ -z "$SETTINGS" ]]; then
             echo "ERROR: settings.gradle(.kts) was not found inside the extracted ZIP." >&2
-            find "$GITHUB_WORKSPACE/_gameforge" -maxdepth 4 -print >&2 || true
+            find "$GITHUB_WORKSPACE/_gameforge" -maxdepth 5 -print >&2 || true
             exit 1
           fi
 
