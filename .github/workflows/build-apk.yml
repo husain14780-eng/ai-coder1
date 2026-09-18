@@ -1,4 +1,4 @@
-name: Build GameForge APK
+name: Build GameForge V6.1 APK
 
 on:
   workflow_dispatch:
@@ -9,72 +9,16 @@ permissions:
   contents: read
 
 concurrency:
-  group: android-build-${{ github.ref }}
+  group: gameforge-android-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   debug-apk:
     runs-on: ubuntu-latest
     timeout-minutes: 120
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Extract ZIP and locate Android project root
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          echo "Workspace contents:"
-          ls -la "$GITHUB_WORKSPACE"
-
-          rm -rf "$GITHUB_WORKSPACE/_gameforge"
-          mkdir -p "$GITHUB_WORKSPACE/_gameforge"
-
-          ZIP="$(find "$GITHUB_WORKSPACE" -maxdepth 3 -type f -name 'GameForge_v5_3*.zip' -print -quit || true)"
-          echo "ZIP_PATH=$ZIP"
-
-          if [[ -z "$ZIP" ]]; then
-            echo "ERROR: GameForge_v5_3*.zip was not found under $GITHUB_WORKSPACE" >&2
-            exit 1
-          fi
-
-          unzip -q "$ZIP" -d "$GITHUB_WORKSPACE/_gameforge"
-
-          echo "Extracted tree:"
-          find "$GITHUB_WORKSPACE/_gameforge" -maxdepth 5 -print | sed -n '1,200p'
-
-          SETTINGS_CANDIDATES=()
-          while IFS= read -r f; do
-            SETTINGS_CANDIDATES+=("$f")
-          done < <(find "$GITHUB_WORKSPACE/_gameforge" -type f \( -name "settings.gradle.kts" -o -name "settings.gradle" \) -print)
-
-          if [[ ${#SETTINGS_CANDIDATES[@]} -eq 0 ]]; then
-            echo "ERROR: No settings.gradle or settings.gradle.kts was found inside the extracted ZIP." >&2
-            exit 1
-          fi
-
-          echo "Settings candidates:"
-          printf '%s\n' "${SETTINGS_CANDIDATES[@]}"
-
-          # Prefer the project with app/build.gradle or app/build.gradle.kts nearby
-          PROJECT_DIR=""
-          for s in "${SETTINGS_CANDIDATES[@]}"; do
-            d="$(dirname "$s")"
-            if [[ -f "$d/app/build.gradle.kts" || -f "$d/app/build.gradle" ]]; then
-              PROJECT_DIR="$d"
-              break
-            fi
-          done
-
-          if [[ -z "$PROJECT_DIR" ]]; then
-            echo "ERROR: No Android app module was found near any settings.gradle file." >&2
-            exit 1
-          fi
-
-          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
-          echo "Resolved project dir: $PROJECT_DIR"
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -88,44 +32,22 @@ jobs:
         with:
           packages: 'platforms;android-36 build-tools;36.0.0 ndk;29.0.13113456 cmake;3.31.6'
 
-      - name: Set up Gradle
+      - name: Set up Gradle 8.13
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.13'
           cache-provider: basic
 
-      - name: Validate source release
-        working-directory: ${{ env.PROJECT_DIR }}
-        run: |
-          if [[ -f tools/check_local_swarm_release.py ]]; then
-            python3 tools/check_local_swarm_release.py
-          else
-            echo "Skipping check_local_swarm_release.py (not present in ZIP project)"
-          fi
+      - name: Validate V6.1 release contract
+        run: python3 tools/check_v6_release.py
 
-      - name: Run GameForge 5.3 audit
-        working-directory: ${{ env.PROJECT_DIR }}
-        run: |
-          if [[ -f tools/audit_v5_3.py ]]; then
-            python3 tools/audit_v5_3.py
-          else
-            echo "Skipping audit_v5_3.py (not present in ZIP project)"
-          fi
+      - name: Run V6.1 audit
+        run: python3 tools/audit_v6.py
 
       - name: Build debug APK
-        working-directory: ${{ env.PROJECT_DIR }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [[ -x ./gradlew ]]; then
-            chmod +x ./gradlew
-            ./gradlew --no-daemon --stacktrace :app:assembleDebug
-          else
-            gradle --no-daemon --stacktrace :app:assembleDebug
-          fi
+        run: gradle --no-daemon --stacktrace :app:assembleDebug
 
       - name: Verify APK
-        working-directory: ${{ env.PROJECT_DIR }}
         run: |
           set -euo pipefail
           test -s app/build/outputs/apk/debug/app-debug.apk
@@ -134,9 +56,9 @@ jobs:
       - name: Upload debug APK
         uses: actions/upload-artifact@v4
         with:
-          name: gameforge-v5.3-verified-debug-apk
+          name: gameforge-v6.1-hardened-debug-apk
           path: |
-            ${{ env.PROJECT_DIR }}/app/build/outputs/apk/debug/app-debug.apk
-            ${{ env.PROJECT_DIR }}/app-debug.sha256
+            app/build/outputs/apk/debug/app-debug.apk
+            app-debug.sha256
           if-no-files-found: error
           retention-days: 14
