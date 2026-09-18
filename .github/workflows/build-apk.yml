@@ -21,39 +21,60 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Extract GameForge 5.3 source ZIP
+      - name: Extract ZIP and locate Android project root
         shell: bash
         run: |
           set -euo pipefail
 
+          echo "Workspace contents:"
+          ls -la "$GITHUB_WORKSPACE"
+
           rm -rf "$GITHUB_WORKSPACE/_gameforge"
           mkdir -p "$GITHUB_WORKSPACE/_gameforge"
 
-          ZIP="$(find "$GITHUB_WORKSPACE" -maxdepth 2 -type f -name 'GameForge_v5_3*.zip' -print -quit || true)"
+          ZIP="$(find "$GITHUB_WORKSPACE" -maxdepth 3 -type f -name 'GameForge_v5_3*.zip' -print -quit || true)"
+          echo "ZIP_PATH=$ZIP"
+
           if [[ -z "$ZIP" ]]; then
-            echo "ERROR: GameForge_v5_3*.zip was not found." >&2
+            echo "ERROR: GameForge_v5_3*.zip was not found under $GITHUB_WORKSPACE" >&2
             exit 1
           fi
 
           unzip -q "$ZIP" -d "$GITHUB_WORKSPACE/_gameforge"
 
-          SETTINGS="$(find "$GITHUB_WORKSPACE/_gameforge" -type f \( -name settings.gradle.kts -o -name settings.gradle \) -print -quit || true)"
-          if [[ -z "$SETTINGS" ]]; then
-            echo "ERROR: settings.gradle(.kts) was not found inside the extracted ZIP." >&2
-            find "$GITHUB_WORKSPACE/_gameforge" -maxdepth 5 -print >&2 || true
+          echo "Extracted tree:"
+          find "$GITHUB_WORKSPACE/_gameforge" -maxdepth 5 -print | sed -n '1,200p'
+
+          SETTINGS_CANDIDATES=()
+          while IFS= read -r f; do
+            SETTINGS_CANDIDATES+=("$f")
+          done < <(find "$GITHUB_WORKSPACE/_gameforge" -type f \( -name "settings.gradle.kts" -o -name "settings.gradle" \) -print)
+
+          if [[ ${#SETTINGS_CANDIDATES[@]} -eq 0 ]]; then
+            echo "ERROR: No settings.gradle or settings.gradle.kts was found inside the extracted ZIP." >&2
             exit 1
           fi
 
-          PROJECT_DIR="$(dirname "$SETTINGS")"
+          echo "Settings candidates:"
+          printf '%s\n' "${SETTINGS_CANDIDATES[@]}"
 
-          if [[ ! -f "$PROJECT_DIR/app/build.gradle.kts" && ! -f "$PROJECT_DIR/app/build.gradle" ]]; then
-            echo "ERROR: Android app module not found under $PROJECT_DIR" >&2
-            find "$PROJECT_DIR" -maxdepth 3 -print >&2 || true
+          # Prefer the project with app/build.gradle or app/build.gradle.kts nearby
+          PROJECT_DIR=""
+          for s in "${SETTINGS_CANDIDATES[@]}"; do
+            d="$(dirname "$s")"
+            if [[ -f "$d/app/build.gradle.kts" || -f "$d/app/build.gradle" ]]; then
+              PROJECT_DIR="$d"
+              break
+            fi
+          done
+
+          if [[ -z "$PROJECT_DIR" ]]; then
+            echo "ERROR: No Android app module was found near any settings.gradle file." >&2
             exit 1
           fi
 
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
-          echo "Using project dir: $PROJECT_DIR"
+          echo "Resolved project dir: $PROJECT_DIR"
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
