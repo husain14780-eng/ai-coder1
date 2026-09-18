@@ -16,33 +16,27 @@ jobs:
   debug-apk:
     runs-on: ubuntu-latest
     timeout-minutes: 120
-
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Prepare GameForge source (extract ZIP when present)
+      - name: Extract GameForge 5.3 source ZIP
         shell: bash
         run: |
           set -euo pipefail
-          rm -rf build_source
-          mkdir -p build_source
-          ZIP=$(find . -maxdepth 2 -type f -name 'GameForge_v*.zip' -print -quit || true)
-          if [[ -n "$ZIP" ]]; then
-            echo "Using source archive: $ZIP"
-            unzip -q "$ZIP" -d build_source
-          else
-            echo "No GameForge ZIP found; using repository checkout as source."
-            rsync -a --exclude='.git' --exclude='build_source' ./ build_source/
-          fi
-          ROOT=$(find build_source -type f -name 'settings.gradle.kts' -print -quit | xargs -r dirname)
-          if [[ -z "$ROOT" || ! -f "$ROOT/app/build.gradle.kts" ]]; then
-            echo 'ERROR: Could not locate a Gradle GameForge project after extraction.' >&2
-            find build_source -maxdepth 4 -type f | head -100
+          rm -rf "$GITHUB_WORKSPACE/_gameforge"
+          mkdir -p "$GITHUB_WORKSPACE/_gameforge"
+          ZIP="$(find "$GITHUB_WORKSPACE" -maxdepth 3 -type f -name 'GameForge_v5_3*.zip' -print -quit || true)"
+          if [[ -z "$ZIP" ]]; then
+            echo 'ERROR: GameForge_v5_3*.zip was not found.' >&2
             exit 1
           fi
-          echo "PROJECT_DIR=$ROOT" >> "$GITHUB_ENV"
-          echo "Project root: $ROOT"
+          unzip -q "$ZIP" -d "$GITHUB_WORKSPACE/_gameforge"
+          SETTINGS="$(find "$GITHUB_WORKSPACE/_gameforge" -type f \( -name settings.gradle.kts -o -name settings.gradle \) -print -quit)"
+          test -n "$SETTINGS"
+          PROJECT_DIR="$(dirname "$SETTINGS")"
+          test -f "$PROJECT_DIR/app/build.gradle.kts"
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -66,17 +60,15 @@ jobs:
         working-directory: ${{ env.PROJECT_DIR }}
         run: python3 tools/check_local_swarm_release.py
 
-      - name: Run full v5.2 audit
+      - name: Run GameForge 5.3 audit
         working-directory: ${{ env.PROJECT_DIR }}
-        run: python3 tools/audit_v5_1.py
+        run: python3 tools/audit_v5_3.py
 
       - name: Build debug APK
         working-directory: ${{ env.PROJECT_DIR }}
         run: gradle --no-daemon --stacktrace :app:assembleDebug
-        env:
-          ANDROID_NDK_HOME: ${{ env.ANDROID_NDK_HOME }}
 
-      - name: Verify APK and checksum
+      - name: Verify APK
         working-directory: ${{ env.PROJECT_DIR }}
         run: |
           set -euo pipefail
@@ -86,7 +78,7 @@ jobs:
       - name: Upload debug APK
         uses: actions/upload-artifact@v4
         with:
-          name: gameforge-v5.2-qwen25-coder-debug-apk
+          name: gameforge-v5.3-verified-debug-apk
           path: |
             ${{ env.PROJECT_DIR }}/app/build/outputs/apk/debug/app-debug.apk
             ${{ env.PROJECT_DIR }}/app-debug.sha256
