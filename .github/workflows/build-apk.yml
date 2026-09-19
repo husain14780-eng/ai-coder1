@@ -9,56 +9,101 @@ permissions:
   contents: read
 
 concurrency:
-  group: gameforge-android-${{ github.ref }}
+  group: gameforge-v61-android-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   debug-apk:
     runs-on: ubuntu-latest
     timeout-minutes: 120
+
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Locate and extract the GameForge V6.1 source ZIP
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf build_source
+          mkdir -p build_source
+
+          ZIP="$(find . -maxdepth 3 -type f -name 'GameForge_v61_2D_RPG_MAX.zip' -print -quit || true)"
+          if [[ -n "$ZIP" ]]; then
+            echo "Using source archive: $ZIP"
+            unzip -tq "$ZIP"
+            unzip -q "$ZIP" -d build_source
+          elif [[ -f "settings.gradle.kts" && -d "app" ]]; then
+            echo "No V6.1 archive found; repository root already contains the Gradle source."
+            rsync -a --exclude='.git' --exclude='build_source' ./ build_source/
+          else
+            echo 'ERROR: No GameForge V6.1 ZIP and no direct Gradle source checkout found.' >&2
+            exit 1
+          fi
+
+          SETTINGS_FILE="$(find build_source -type f -name 'settings.gradle.kts' -print -quit || true)"
+          if [[ -z "$SETTINGS_FILE" ]]; then
+            echo 'ERROR: settings.gradle.kts not found after source preparation.' >&2
+            find build_source -maxdepth 5 -type f | sort | head -200
+            exit 1
+          fi
+
+          PROJECT_DIR="$(dirname "$SETTINGS_FILE")"
+          test -f "$PROJECT_DIR/app/build.gradle.kts"
+          test -f "$PROJECT_DIR/VERSION.txt"
+          test -f "$PROJECT_DIR/tools/audit_v6.py"
+          test -f "$PROJECT_DIR/.github/workflows/build-apk.yml" || true
+
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+          echo "Prepared source root: $PROJECT_DIR"
 
       - name: Set up JDK 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
           cache: gradle
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+      - name: Set up Android SDK / NDK / CMake
+        uses: android-actions/setup-android@v4
         with:
           packages: 'platforms;android-36 build-tools;36.0.0 ndk;29.0.13113456 cmake;3.31.6'
 
       - name: Set up Gradle 8.13
-        uses: gradle/actions/setup-gradle@v4
+        uses: gradle/actions/setup-gradle@v6
         with:
           gradle-version: '8.13'
           cache-provider: basic
 
-      - name: Validate V6.1 release contract
-        run: python3 tools/check_v6_release.py
-
-      - name: Run V6.1 audit
-        run: python3 tools/audit_v6.py
-
-      - name: Build debug APK
-        run: gradle --no-daemon --stacktrace :app:assembleDebug
-
-      - name: Verify APK
+      - name: Validate local swarm and V6.1 release metadata
+        working-directory: ${{ env.PROJECT_DIR }}
         run: |
           set -euo pipefail
-          test -s app/build/outputs/apk/debug/app-debug.apk
-          sha256sum app/build/outputs/apk/debug/app-debug.apk | tee app-debug.sha256
+          python3 tools/check_release.py .
+          python3 tools/audit_v6.py
 
-      - name: Upload debug APK
-        uses: actions/upload-artifact@v4
+      - name: Build GameForge V6.1 debug APK
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: |
+          set -euo pipefail
+          gradle --no-daemon --stacktrace :app:assembleDebug
+
+      - name: Verify APK and checksum
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: |
+          set -euo pipefail
+          APK="app/build/outputs/apk/debug/app-debug.apk"
+          test -s "$APK"
+          sha256sum "$APK" | tee app-debug.sha256
+          unzip -t "$APK" >/tmp/apk-unzip-check.txt
+          test -s /tmp/apk-unzip-check.txt
+
+      - name: Upload GameForge V6.1 debug APK
+        uses: actions/upload-artifact@v7
         with:
-          name: gameforge-v6.1-hardened-debug-apk
+          name: gameforge-v61-2d-rpg-max-debug-apk
           path: |
-            app/build/outputs/apk/debug/app-debug.apk
-            app-debug.sha256
+            ${{ env.PROJECT_DIR }}/app/build/outputs/apk/debug/app-debug.apk
+            ${{ env.PROJECT_DIR }}/app-debug.sha256
           if-no-files-found: error
           retention-days: 14
