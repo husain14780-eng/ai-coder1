@@ -82,6 +82,7 @@ jobs:
         run: |
           set -euo pipefail
           python3 tools/check_release.py .
+          python3 tools/check_jvm_targets.py .
           python3 tools/audit_v6.py
 
       - name: Build GameForge V6.1 debug APK
