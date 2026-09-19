@@ -28,7 +28,9 @@ jobs:
           rm -rf build_source
           mkdir -p build_source
 
-          ZIP="$(find . -maxdepth 3 -type f -name 'GameForge_v61_2D_RPG_MAX.zip' -print -quit || true)"
+          ZIP="$(find . -maxdepth 3 -type f \
+            \( -iname 'GameForge_V61_2D_RPG_MAX.zip' -o -iname 'GameForge_v61_2D_RPG_MAX.zip' -o -iname 'GameForge*V61*2D*RPG*MAX*.zip' \) \
+            -print -quit || true)"
           if [[ -n "$ZIP" ]]; then
             echo "Using source archive: $ZIP"
             unzip -tq "$ZIP"
