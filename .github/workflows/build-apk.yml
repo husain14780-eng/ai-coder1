@@ -1,4 +1,4 @@
-name: Build GameForge V71 APK
+name: Build GameForge V72 APK
 
 on:
   workflow_dispatch:
@@ -9,7 +9,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: gameforge-v71-android-${{ github.ref }}
+  group: gameforge-v72-android-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -29,20 +29,20 @@ jobs:
           mkdir -p build_source
 
           # Prefer the exact crash-fix archive. If it is not present, use the
-          # legacy V71 archive names. This avoids nondeterministic `find -quit`
+          # legacy V72 archive names. This avoids nondeterministic `find -quit`
           # selection when several GameForge ZIPs are committed.
           ZIP=""
           for candidate in \
-            "./GameForge_V71_2D_RPG_FINAL_MAX_INTERNAL_CRASHFIX.zip" \
-            "./GameForge_V71_2D_RPG_FINAL_MAX_INTERNAL_AUTO_MODEL_V2.zip" \
-            "./GameForge_V71_2D_RPG_FINAL_MAX_INTERNAL.zip" \
-            "./GameForge_v71_2D_RPG_FINAL_MAX_INTERNAL.zip"; do
+            "./GameForge_V72_2D_RPG_FINAL_MAX_INTERNAL_CRASHFIX.zip" \
+            "./GameForge_V72_2D_RPG_FINAL_MAX_INTERNAL_AUTO_MODEL_V2.zip" \
+            "./GameForge_V72_2D_RPG_FINAL_MAX_INTERNAL.zip" \
+            "./GameForge_v72_2D_RPG_FINAL_MAX_INTERNAL.zip"; do
             if [[ -f "$candidate" ]]; then ZIP="$candidate"; break; fi
           done
 
           if [[ -z "$ZIP" ]]; then
             ZIP="$(find . -maxdepth 3 -type f \
-              -iname 'GameForge*V71*2D*RPG*FINAL*MAX*INTERNAL*.zip' \
+              -iname 'GameForge*V72*2D*RPG*FINAL*MAX*INTERNAL*.zip' \
               -print -quit || true)"
           fi
 
@@ -91,7 +91,7 @@ jobs:
           gradle-version: '8.13'
           cache-provider: basic
 
-      - name: Validate V71 internal-only release metadata, memory safety and deep audits
+      - name: Validate V72 internal-only release metadata, memory safety and deep audits
         working-directory: ${{ env.PROJECT_DIR }}
         run: |
           set -euo pipefail
@@ -125,7 +125,7 @@ jobs:
           print(f'source inventory/input validation: PASS ({len(refs)} referenced view IDs)')
           PY
 
-      - name: Build GameForge V71 debug APK
+      - name: Build GameForge V72 debug APK
         working-directory: ${{ env.PROJECT_DIR }}
         run: |
           set -euo pipefail
@@ -154,7 +154,7 @@ jobs:
 
           "$AAPT" dump badging "$APK" >/tmp/apk-badging.txt
           grep -Fq "package: name='com.husain.aicoder'" /tmp/apk-badging.txt
-          grep -Fq "versionCode='71'" /tmp/apk-badging.txt
+          grep -Fq "versionCode='72'" /tmp/apk-badging.txt
 
           "$AAPT" dump permissions "$APK" >/tmp/apk-permissions.txt
           grep -Fq "android.permission.INTERNET" /tmp/apk-permissions.txt
@@ -167,10 +167,10 @@ jobs:
 
           echo 'APK verification: PASS'
 
-      - name: Upload GameForge V71 debug APK
+      - name: Upload GameForge V72 debug APK
         uses: actions/upload-artifact@v7
         with:
-          name: gameforge-v71-2d-rpg-final-max-internal-debug-apk
+          name: gameforge-v72-2d-rpg-final-max-internal-debug-apk
           path: |
             ${{ env.PROJECT_DIR }}/app/build/outputs/apk/debug/app-debug.apk
             ${{ env.PROJECT_DIR }}/app-debug.sha256
