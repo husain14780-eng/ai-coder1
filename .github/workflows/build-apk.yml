@@ -87,6 +87,26 @@ jobs:
           python3 tools/check_native_api.py .
           python3 tools/check_inapp_features.py .
           python3 tools/check_memory_safety.py .
+          python3 - <<'PY'
+from pathlib import Path
+
+root = Path(".")
+excluded_dirs = {".git", "build"}
+entries = []
+for p in root.rglob("*"):
+    if not p.is_file():
+        continue
+    rel = p.relative_to(root).as_posix()
+    parts = rel.split("/")
+    if any(part in excluded_dirs for part in parts[:-1]):
+        continue
+    if rel.endswith(".apk") or rel.endswith(".sha256") or rel == "FILES.txt":
+        continue
+    entries.append(rel)
+
+Path("FILES.txt").write_text("\n".join(sorted(entries)) + "\n")
+print(f"Regenerated FILES.txt: {len(entries)} source files")
+PY
           python3 tools/audit_v7.py
 
       - name: Validate source inventory and workflow inputs
