@@ -139,28 +139,58 @@ jobs:
           APK="app/build/outputs/apk/debug/app-debug.apk"
           test -s "$APK"
 
-          # Do not depend on build-tools being on PATH. setup-android installs
-          # the requested version under ANDROID_HOME/build-tools/<version>.
+          # Prefer AAPT2 for APK inspection; it is the supported modern manifest
+          # inspection tool and is installed with Android Build-Tools. Keep an
+          # aapt fallback for environments where only the legacy binary exists.
+          AAPT2="${ANDROID_HOME}/build-tools/36.0.0/aapt2"
           AAPT="${ANDROID_HOME}/build-tools/36.0.0/aapt"
-          if [[ ! -x "$AAPT" ]]; then
-            AAPT="$(find "${ANDROID_HOME}/build-tools" -type f -path '*/aapt' -perm -111 | sort -V | tail -1 || true)"
+          if [[ -x "$AAPT2" ]]; then
+            INSPECTOR="$AAPT2"
+          elif [[ -x "$AAPT" ]]; then
+            INSPECTOR="$AAPT"
+          else
+            INSPECTOR="$(find "${ANDROID_HOME}/build-tools" -type f \n              \( -path '*/aapt2' -o -path '*/aapt' \) -perm -111 | sort -V | tail -1 || true)"
           fi
-          test -n "$AAPT" && test -x "$AAPT"
-          echo "Using aapt: $AAPT"
+          test -n "$INSPECTOR" && test -x "$INSPECTOR"
+          echo "Using APK inspector: $INSPECTOR"
 
           sha256sum "$APK" | tee app-debug.sha256
           unzip -tq "$APK" >/tmp/apk-unzip-check.txt
           test -s /tmp/apk-unzip-check.txt
 
-          "$AAPT" dump badging "$APK" >/tmp/apk-badging.txt
+          "$INSPECTOR" dump badging "$APK" >/tmp/apk-badging.txt
+          cat /tmp/apk-badging.txt
           grep -Fq "package: name='com.husain.aicoder'" /tmp/apk-badging.txt
-          grep -Fq "versionCode='72'" /tmp/apk-badging.txt
+          grep -Eq "versionCode='72'" /tmp/apk-badging.txt
 
-          "$AAPT" dump permissions "$APK" >/tmp/apk-permissions.txt
-          grep -Fq "android.permission.INTERNET" /tmp/apk-permissions.txt
-          grep -Fq "android.permission.ACCESS_NETWORK_STATE" /tmp/apk-permissions.txt
+          # `aapt`/`aapt2` have emitted slightly different punctuation across
+          # Build-Tools versions (for example `uses-permission:'name'`).
+          # Match the permission name rather than the whole output line so the
+          # verifier doesn't false-fail on harmless formatting differences.
+          "$INSPECTOR" dump permissions "$APK" >/tmp/apk-permissions.txt
+          echo '--- APK permissions ---'
+          cat /tmp/apk-permissions.txt
+          echo '----------------------'
 
-          if grep -E 'BIND_ACCESSIBILITY_SERVICE|FOREGROUND_SERVICE_MEDIA_PROJECTION' /tmp/apk-permissions.txt; then
+          required_permissions=(
+            'android.permission.INTERNET'
+            'android.permission.ACCESS_NETWORK_STATE'
+          )
+          missing=0
+          for permission in "${required_permissions[@]}"; do
+            if ! grep -Fq "$permission" /tmp/apk-permissions.txt; then
+              echo "ERROR: required permission missing from final APK: $permission" >&2
+              missing=1
+            fi
+          done
+          if (( missing )); then
+            echo '--- compiled AndroidManifest.xml ---' >&2
+            "$INSPECTOR" dump xmltree "$APK" AndroidManifest.xml >&2 || true
+            echo '------------------------------------' >&2
+            exit 1
+          fi
+
+          if grep -Eq 'BIND_ACCESSIBILITY_SERVICE|FOREGROUND_SERVICE_MEDIA_PROJECTION' /tmp/apk-permissions.txt; then
             echo 'ERROR: forbidden device-capture permission leaked into APK' >&2
             exit 1
           fi
