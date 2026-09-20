@@ -1,4 +1,4 @@
-name: Build GameForge V72 APK
+name: Build GameForge V7.2.1 APK
 
 on:
   workflow_dispatch:
@@ -9,7 +9,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: gameforge-v72-android-${{ github.ref }}
+  group: gameforge-v721-android-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -33,17 +33,12 @@ jobs:
           # selection when several GameForge ZIPs are committed.
           ZIP=""
           for candidate in \
-            "./GameForge_V72_2D_RPG_FINAL_MAX_INTERNAL_CRASHFIX.zip" \
-            "./GameForge_V72_2D_RPG_FINAL_MAX_INTERNAL_AUTO_MODEL_V2.zip" \
-            "./GameForge_V72_2D_RPG_FINAL_MAX_INTERNAL.zip" \
-            "./GameForge_v72_2D_RPG_FINAL_MAX_INTERNAL.zip"; do
+            "./GameForge_V721_2D_RPG_FINAL_MAX_INTERNAL_SAFE_STARTUP_IMPORT_ONLY.zip"; do
             if [[ -f "$candidate" ]]; then ZIP="$candidate"; break; fi
           done
 
           if [[ -z "$ZIP" ]]; then
-            ZIP="$(find . -maxdepth 3 -type f \
-              -iname 'GameForge*V72*2D*RPG*FINAL*MAX*INTERNAL*.zip' \
-              -print -quit || true)"
+            ZIP=""
           fi
 
           if [[ -n "$ZIP" ]]; then
@@ -54,7 +49,7 @@ jobs:
             echo "No V7 archive found; repository root already contains the Gradle source."
             rsync -a --exclude='.git' --exclude='build_source' ./ build_source/
           else
-            echo 'ERROR: No GameForge V7 ZIP and no direct Gradle source checkout found.' >&2
+            echo 'ERROR: V7.2.1 source not found. Commit the exact SAFE_STARTUP archive or the Gradle project root.' >&2
             exit 1
           fi
 
@@ -69,6 +64,7 @@ jobs:
           test -f "$PROJECT_DIR/app/build.gradle.kts"
           test -f "$PROJECT_DIR/VERSION.txt"
           test -f "$PROJECT_DIR/tools/audit_v7.py"
+          grep -Fxq "7.2.1-2D-RPG-FINAL-MAX-INTERNAL-SAFE-STARTUP" "$PROJECT_DIR/VERSION.txt"
 
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
           echo "Prepared source root: $PROJECT_DIR"
@@ -91,7 +87,7 @@ jobs:
           gradle-version: '8.13'
           cache-provider: basic
 
-      - name: Validate V72 internal-only release metadata, memory safety and deep audits
+      - name: Validate V7.2.1 internal-only release metadata, memory safety and deep audits
         working-directory: ${{ env.PROJECT_DIR }}
         run: |
           set -euo pipefail
@@ -125,7 +121,7 @@ jobs:
           print(f'source inventory/input validation: PASS ({len(refs)} referenced view IDs)')
           PY
 
-      - name: Build GameForge V72 debug APK
+      - name: Build GameForge V7.2.1 debug APK
         working-directory: ${{ env.PROJECT_DIR }}
         run: |
           set -euo pipefail
@@ -149,7 +145,7 @@ jobs:
           elif [[ -x "$AAPT" ]]; then
             INSPECTOR="$AAPT"
           else
-            INSPECTOR="$(find "${ANDROID_HOME}/build-tools" -type f \n              \( -path '*/aapt2' -o -path '*/aapt' \) -perm -111 | sort -V | tail -1 || true)"
+            INSPECTOR="$(find "${ANDROID_HOME}/build-tools" -type f \( -path '*/aapt2' -o -path '*/aapt' \) -perm -111 | sort -V | tail -1 || true)"
           fi
           test -n "$INSPECTOR" && test -x "$INSPECTOR"
           echo "Using APK inspector: $INSPECTOR"
@@ -161,7 +157,7 @@ jobs:
           "$INSPECTOR" dump badging "$APK" >/tmp/apk-badging.txt
           cat /tmp/apk-badging.txt
           grep -Fq "package: name='com.husain.aicoder'" /tmp/apk-badging.txt
-          grep -Eq "versionCode='72'" /tmp/apk-badging.txt
+          grep -Eq "versionCode='73'" /tmp/apk-badging.txt
 
           # `aapt`/`aapt2` have emitted slightly different punctuation across
           # Build-Tools versions (for example `uses-permission:'name'`).
@@ -197,10 +193,10 @@ jobs:
 
           echo 'APK verification: PASS'
 
-      - name: Upload GameForge V72 debug APK
+      - name: Upload GameForge V7.2.1 debug APK
         uses: actions/upload-artifact@v7
         with:
-          name: gameforge-v72-2d-rpg-final-max-internal-debug-apk
+          name: gameforge-v721-2d-rpg-final-max-internal-safe-startup-debug-apk
           path: |
             ${{ env.PROJECT_DIR }}/app/build/outputs/apk/debug/app-debug.apk
             ${{ env.PROJECT_DIR }}/app-debug.sha256
