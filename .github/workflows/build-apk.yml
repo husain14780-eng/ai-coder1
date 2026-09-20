@@ -28,9 +28,24 @@ jobs:
           rm -rf build_source
           mkdir -p build_source
 
-          ZIP="$(find . -maxdepth 3 -type f \
-            \( -iname 'GameForge_V71_2D_RPG_FINAL_MAX_INTERNAL.zip' -o -iname 'GameForge_v71_2D_RPG_FINAL_MAX_INTERNAL.zip' -o -iname 'GameForge*V71*2D*RPG*FINAL*MAX*INTERNAL*.zip' \) \
-            -print -quit || true)"
+          # Prefer the exact crash-fix archive. If it is not present, use the
+          # legacy V71 archive names. This avoids nondeterministic `find -quit`
+          # selection when several GameForge ZIPs are committed.
+          ZIP=""
+          for candidate in \
+            "./GameForge_V71_2D_RPG_FINAL_MAX_INTERNAL_CRASHFIX.zip" \
+            "./GameForge_V71_2D_RPG_FINAL_MAX_INTERNAL_AUTO_MODEL_V2.zip" \
+            "./GameForge_V71_2D_RPG_FINAL_MAX_INTERNAL.zip" \
+            "./GameForge_v71_2D_RPG_FINAL_MAX_INTERNAL.zip"; do
+            if [[ -f "$candidate" ]]; then ZIP="$candidate"; break; fi
+          done
+
+          if [[ -z "$ZIP" ]]; then
+            ZIP="$(find . -maxdepth 3 -type f \
+              -iname 'GameForge*V71*2D*RPG*FINAL*MAX*INTERNAL*.zip' \
+              -print -quit || true)"
+          fi
+
           if [[ -n "$ZIP" ]]; then
             echo "Using source archive: $ZIP"
             unzip -tq "$ZIP"
@@ -54,7 +69,6 @@ jobs:
           test -f "$PROJECT_DIR/app/build.gradle.kts"
           test -f "$PROJECT_DIR/VERSION.txt"
           test -f "$PROJECT_DIR/tools/audit_v7.py"
-          test -f "$PROJECT_DIR/.github/workflows/build-apk.yml" || true
 
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
           echo "Prepared source root: $PROJECT_DIR"
@@ -119,21 +133,39 @@ jobs:
 
       - name: Verify APK and checksum
         working-directory: ${{ env.PROJECT_DIR }}
+        shell: bash
         run: |
           set -euo pipefail
           APK="app/build/outputs/apk/debug/app-debug.apk"
           test -s "$APK"
+
+          # Do not depend on build-tools being on PATH. setup-android installs
+          # the requested version under ANDROID_HOME/build-tools/<version>.
+          AAPT="${ANDROID_HOME}/build-tools/36.0.0/aapt"
+          if [[ ! -x "$AAPT" ]]; then
+            AAPT="$(find "${ANDROID_HOME}/build-tools" -type f -path '*/aapt' -perm -111 | sort -V | tail -1 || true)"
+          fi
+          test -n "$AAPT" && test -x "$AAPT"
+          echo "Using aapt: $AAPT"
+
           sha256sum "$APK" | tee app-debug.sha256
-          unzip -t "$APK" >/tmp/apk-unzip-check.txt
+          unzip -tq "$APK" >/tmp/apk-unzip-check.txt
           test -s /tmp/apk-unzip-check.txt
-          command -v aapt >/dev/null
-          aapt dump badging "$APK" >/tmp/apk-badging.txt
-          grep -q "package: name='com.husain.aicoder'" /tmp/apk-badging.txt
-          grep -q "versionCode='71'" /tmp/apk-badging.txt
-          if aapt dump permissions "$APK" | grep -E 'BIND_ACCESSIBILITY_SERVICE|FOREGROUND_SERVICE_MEDIA_PROJECTION'; then
+
+          "$AAPT" dump badging "$APK" >/tmp/apk-badging.txt
+          grep -Fq "package: name='com.husain.aicoder'" /tmp/apk-badging.txt
+          grep -Fq "versionCode='71'" /tmp/apk-badging.txt
+
+          "$AAPT" dump permissions "$APK" >/tmp/apk-permissions.txt
+          grep -Fq "android.permission.INTERNET" /tmp/apk-permissions.txt
+          grep -Fq "android.permission.ACCESS_NETWORK_STATE" /tmp/apk-permissions.txt
+
+          if grep -E 'BIND_ACCESSIBILITY_SERVICE|FOREGROUND_SERVICE_MEDIA_PROJECTION' /tmp/apk-permissions.txt; then
             echo 'ERROR: forbidden device-capture permission leaked into APK' >&2
             exit 1
           fi
+
+          echo 'APK verification: PASS'
 
       - name: Upload GameForge V71 debug APK
         uses: actions/upload-artifact@v7
