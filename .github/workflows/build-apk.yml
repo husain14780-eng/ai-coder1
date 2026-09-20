@@ -111,6 +111,15 @@ jobs:
           print(f'source inventory/input validation: PASS ({len(refs)} referenced view IDs)')
           PY
 
+      - name: Verify Gradle Android release metadata
+        working-directory: ${{ env.PROJECT_DIR }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -Fq 'applicationId = "com.husain.aicoder"' app/build.gradle.kts
+          grep -Fq 'versionCode = 71' app/build.gradle.kts
+          echo "Gradle metadata: applicationId=com.husain.aicoder versionCode=71"
+
       - name: Build GameForge V71 debug APK
         working-directory: ${{ env.PROJECT_DIR }}
         run: |
@@ -127,9 +136,28 @@ jobs:
           unzip -t "$APK" >/tmp/apk-unzip-check.txt
           test -s /tmp/apk-unzip-check.txt
           command -v aapt >/dev/null
-          aapt dump badging "$APK" >/tmp/apk-badging.txt
-          grep -q "package: name='com.husain.aicoder'" /tmp/apk-badging.txt
-          grep -q "versionCode='71'" /tmp/apk-badging.txt
+          aapt dump badging "$APK" | tee /tmp/apk-badging.txt
+
+          PACKAGE_LINE="$(grep '^package:' /tmp/apk-badging.txt | head -n 1 || true)"
+          if [[ "$PACKAGE_LINE" != *"name='com.husain.aicoder'"* ]]; then
+            echo "ERROR: unexpected application ID in APK"
+            echo "Expected: com.husain.aicoder"
+            echo "Actual package line:"
+            echo "${PACKAGE_LINE:-<missing>}"
+            exit 1
+          fi
+
+          if [[ "$PACKAGE_LINE" != *"versionCode='71'"* ]]; then
+            echo "ERROR: unexpected APK versionCode"
+            echo "Expected: 71"
+            echo "Actual package line:"
+            echo "${PACKAGE_LINE:-<missing>}"
+            exit 1
+          fi
+
+          echo "APK metadata verification: PASS"
+          echo "$PACKAGE_LINE"
+
           if aapt dump permissions "$APK" | grep -E 'BIND_ACCESSIBILITY_SERVICE|FOREGROUND_SERVICE_MEDIA_PROJECTION'; then
             echo 'ERROR: forbidden device-capture permission leaked into APK' >&2
             exit 1
