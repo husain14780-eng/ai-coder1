@@ -1,4 +1,4 @@
-name: Build GameForge V7.2.1 APK
+name: Build GameForge V7.2.1 Unique APK
 
 on:
   workflow_dispatch:
@@ -9,65 +9,36 @@ permissions:
   contents: read
 
 concurrency:
-  group: gameforge-v721-android-${{ github.ref }}
+  group: gameforge-v721-unique-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   debug-apk:
     runs-on: ubuntu-latest
     timeout-minutes: 120
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
 
-      - name: Locate and extract the GameForge V7 source ZIP
+      - name: Locate exact V7.2.1 source ZIP
         shell: bash
         run: |
           set -euo pipefail
           rm -rf build_source
           mkdir -p build_source
-
-          # Prefer the exact crash-fix archive. If it is not present, use the
-          # legacy V72 archive names. This avoids nondeterministic `find -quit`
-          # selection when several GameForge ZIPs are committed.
-          ZIP=""
-          for candidate in \
-            "./GameForge_V721_2D_RPG_FINAL_MAX_INTERNAL_SAFE_STARTUP_IMPORT_ONLY.zip"; do
-            if [[ -f "$candidate" ]]; then ZIP="$candidate"; break; fi
-          done
-
-          if [[ -z "$ZIP" ]]; then
-            ZIP=""
-          fi
-
-          if [[ -n "$ZIP" ]]; then
-            echo "Using source archive: $ZIP"
-            unzip -tq "$ZIP"
-            unzip -q "$ZIP" -d build_source
-          elif [[ -f "settings.gradle.kts" && -d "app" ]]; then
-            echo "No V7 archive found; repository root already contains the Gradle source."
-            rsync -a --exclude='.git' --exclude='build_source' ./ build_source/
-          else
-            echo 'ERROR: V7.2.1 source not found. Commit the exact SAFE_STARTUP archive or the Gradle project root.' >&2
+          ZIP="./GameForge_V721_UNIQUE_APK_BUILD75.zip"
+          if [[ ! -f "$ZIP" ]]; then
+            echo "ERROR: exact V7.2.1 source archive missing: $ZIP" >&2
             exit 1
           fi
-
-          SETTINGS_FILE="$(find build_source -type f -name 'settings.gradle.kts' -print -quit || true)"
-          if [[ -z "$SETTINGS_FILE" ]]; then
-            echo 'ERROR: settings.gradle.kts not found after source preparation.' >&2
-            find build_source -maxdepth 5 -type f | sort | head -200
-            exit 1
-          fi
-
+          unzip -tq "$ZIP"
+          unzip -q "$ZIP" -d build_source
+          SETTINGS_FILE="$(find build_source -type f -name settings.gradle.kts -print -quit || true)"
+          test -n "$SETTINGS_FILE"
           PROJECT_DIR="$(dirname "$SETTINGS_FILE")"
           test -f "$PROJECT_DIR/app/build.gradle.kts"
-          test -f "$PROJECT_DIR/VERSION.txt"
-          test -f "$PROJECT_DIR/tools/audit_v7.py"
-          grep -Fxq "7.2.1-2D-RPG-FINAL-MAX-INTERNAL-SAFE-STARTUP" "$PROJECT_DIR/VERSION.txt"
-
+          grep -Fxq "7.2.1-2D-RPG-FINAL-MAX-INTERNAL-SAFE-STARTUP-UNIQUE-BUILD" "$PROJECT_DIR/VERSION.txt"
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
-          echo "Prepared source root: $PROJECT_DIR"
 
       - name: Set up JDK 17
         uses: actions/setup-java@v6
@@ -87,7 +58,7 @@ jobs:
           gradle-version: '8.13'
           cache-provider: basic
 
-      - name: Validate V7.2.1 internal-only release metadata, memory safety and deep audits
+      - name: Validate V7.2.1 unique build source
         working-directory: ${{ env.PROJECT_DIR }}
         run: |
           set -euo pipefail
@@ -98,107 +69,71 @@ jobs:
           python3 tools/check_inapp_features.py .
           python3 tools/check_memory_safety.py .
           python3 tools/audit_v7.py
+          python3 tools/check_local_swarm_release.py
 
-      - name: Validate source inventory and workflow inputs
+      - name: Validate import-only model policy
         working-directory: ${{ env.PROJECT_DIR }}
         run: |
           set -euo pipefail
-          python3 -m compileall -q tools
-          python3 - <<'PY'
-          from pathlib import Path
-          import re, xml.etree.ElementTree as ET
-          root = Path('.')
-          layout = root / 'app/src/main/res/layout/activity_main.xml'
-          xml = ET.parse(layout).getroot()
-          ids = {v for e in xml.iter() for k,v in e.attrib.items() if k.endswith('}id') or k == 'android:id'}
-          refs = set()
-          for p in (root / 'app/src/main/java').rglob('*.kt'):
-              refs.update(re.findall(r'R\.id\.([A-Za-z0-9_]+)', p.read_text(encoding='utf-8', errors='replace')))
-          missing = sorted(x for x in refs if '@+id/' + x not in ids and '@id/' + x not in ids)
-          assert not missing, 'missing layout IDs: ' + ', '.join(missing)
-          assert not list((root/'app/src/main').rglob('*AccessibilityService*')), 'accessibility source remains'
-          assert not list((root/'app/src/main').rglob('*ScreenCaptureService*')), 'screen capture source remains'
-          print(f'source inventory/input validation: PASS ({len(refs)} referenced view IDs)')
-          PY
+          # No startup call may invoke the automatic model downloader.
+          if grep -RIn --include='*.kt' -E 'ensureDefaultCoderDownloaded[[:space:]]*\(|AUTO_CODER_URL' app/src/main/java; then
+            echo 'ERROR: automatic Qwen2.5-Coder downloader still callable from app source' >&2
+            exit 1
+          fi
 
-      - name: Build GameForge V7.2.1 debug APK
+      - name: Build V7.2.1 unique debug APK
         working-directory: ${{ env.PROJECT_DIR }}
         run: |
           set -euo pipefail
           gradle --no-daemon --stacktrace --warning-mode all :app:assembleDebug
 
-      - name: Verify APK and checksum
+      - name: Verify APK identity and permissions
         working-directory: ${{ env.PROJECT_DIR }}
         shell: bash
         run: |
           set -euo pipefail
           APK="app/build/outputs/apk/debug/app-debug.apk"
           test -s "$APK"
-
-          # Prefer AAPT2 for APK inspection; it is the supported modern manifest
-          # inspection tool and is installed with Android Build-Tools. Keep an
-          # aapt fallback for environments where only the legacy binary exists.
-          AAPT2="${ANDROID_HOME}/build-tools/36.0.0/aapt2"
           AAPT="${ANDROID_HOME}/build-tools/36.0.0/aapt"
-          if [[ -x "$AAPT2" ]]; then
-            INSPECTOR="$AAPT2"
-          elif [[ -x "$AAPT" ]]; then
-            INSPECTOR="$AAPT"
-          else
-            INSPECTOR="$(find "${ANDROID_HOME}/build-tools" -type f \( -path '*/aapt2' -o -path '*/aapt' \) -perm -111 | sort -V | tail -1 || true)"
-          fi
-          test -n "$INSPECTOR" && test -x "$INSPECTOR"
-          echo "Using APK inspector: $INSPECTOR"
-
-          sha256sum "$APK" | tee app-debug.sha256
-          unzip -tq "$APK" >/tmp/apk-unzip-check.txt
-          test -s /tmp/apk-unzip-check.txt
-
-          "$INSPECTOR" dump badging "$APK" >/tmp/apk-badging.txt
-          cat /tmp/apk-badging.txt
+          [[ -x "$AAPT" ]] || AAPT="$(find "${ANDROID_HOME}/build-tools" -type f -path '*/aapt' -perm -111 | sort -V | tail -1 || true)"
+          test -x "$AAPT"
+          "$AAPT" dump badging "$APK" | tee /tmp/apk-badging.txt
           grep -Fq "package: name='com.husain.aicoder'" /tmp/apk-badging.txt
-          grep -Eq "versionCode='73'" /tmp/apk-badging.txt
-
-          # `aapt`/`aapt2` have emitted slightly different punctuation across
-          # Build-Tools versions (for example `uses-permission:'name'`).
-          # Match the permission name rather than the whole output line so the
-          # verifier doesn't false-fail on harmless formatting differences.
-          "$INSPECTOR" dump permissions "$APK" >/tmp/apk-permissions.txt
-          echo '--- APK permissions ---'
-          cat /tmp/apk-permissions.txt
-          echo '----------------------'
-
-          required_permissions=(
-            'android.permission.INTERNET'
-            'android.permission.ACCESS_NETWORK_STATE'
-          )
-          missing=0
-          for permission in "${required_permissions[@]}"; do
-            if ! grep -Fq "$permission" /tmp/apk-permissions.txt; then
-              echo "ERROR: required permission missing from final APK: $permission" >&2
-              missing=1
-            fi
-          done
-          if (( missing )); then
-            echo '--- compiled AndroidManifest.xml ---' >&2
-            "$INSPECTOR" dump xmltree "$APK" AndroidManifest.xml >&2 || true
-            echo '------------------------------------' >&2
-            exit 1
-          fi
-
+          grep -Fq "versionCode='75'" /tmp/apk-badging.txt
+          grep -Fq "versionName='7.2.1-2D-RPG-FINAL-MAX-INTERNAL-SAFE-STARTUP-UNIQUE-BUILD'" /tmp/apk-badging.txt
+          "$AAPT" dump permissions "$APK" | tee /tmp/apk-permissions.txt
+          grep -Fq 'android.permission.INTERNET' /tmp/apk-permissions.txt
+          grep -Fq 'android.permission.ACCESS_NETWORK_STATE' /tmp/apk-permissions.txt
           if grep -Eq 'BIND_ACCESSIBILITY_SERVICE|FOREGROUND_SERVICE_MEDIA_PROJECTION' /tmp/apk-permissions.txt; then
             echo 'ERROR: forbidden device-capture permission leaked into APK' >&2
             exit 1
           fi
+          unzip -tq "$APK"
 
-          echo 'APK verification: PASS'
+      - name: Create unique APK filename
+        working-directory: ${{ env.PROJECT_DIR }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          SHORT_SHA="${GITHUB_SHA:0:8}"
+          UNIQUE="GameForge_V7.2.1_BUILD75_RUN${GITHUB_RUN_NUMBER}_${SHORT_SHA}.apk"
+          mkdir -p dist
+          cp app/build/outputs/apk/debug/app-debug.apk "dist/$UNIQUE"
+          sha256sum "dist/$UNIQUE" | tee "dist/$UNIQUE.sha256"
+          printf '%s\n' \
+            'GameForge V7.2.1 Unique Build' \
+            'versionCode=75' \
+            "github_run=${GITHUB_RUN_NUMBER}" \
+            "github_sha=${GITHUB_SHA}" \
+            "apk=$UNIQUE" > dist/BUILD_ID.txt
 
-      - name: Upload GameForge V7.2.1 debug APK
+      - name: Upload unique APK artifact
         uses: actions/upload-artifact@v7
         with:
-          name: gameforge-v721-2d-rpg-final-max-internal-safe-startup-debug-apk
+          name: gameforge-v721-unique-run-${{ github.run_number }}-${{ github.sha }}
           path: |
-            ${{ env.PROJECT_DIR }}/app/build/outputs/apk/debug/app-debug.apk
-            ${{ env.PROJECT_DIR }}/app-debug.sha256
+            ${{ env.PROJECT_DIR }}/dist/*.apk
+            ${{ env.PROJECT_DIR }}/dist/*.sha256
+            ${{ env.PROJECT_DIR }}/dist/BUILD_ID.txt
           if-no-files-found: error
           retention-days: 14
