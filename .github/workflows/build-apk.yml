@@ -1,4 +1,4 @@
-name: Build GameForge V6.1 APK
+name: Build GameForge V71 APK
 
 on:
   workflow_dispatch:
@@ -9,7 +9,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: gameforge-v61-android-${{ github.ref }}
+  group: gameforge-v71-android-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -19,9 +19,9 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
-      - name: Locate and extract the GameForge V6.1 source ZIP
+      - name: Locate and extract the GameForge V7 source ZIP
         shell: bash
         run: |
           set -euo pipefail
@@ -29,17 +29,17 @@ jobs:
           mkdir -p build_source
 
           ZIP="$(find . -maxdepth 3 -type f \
-            \( -iname 'GameForge_V61_2D_RPG_MAX.zip' -o -iname 'GameForge_v61_2D_RPG_MAX.zip' -o -iname 'GameForge*V61*2D*RPG*MAX*.zip' \) \
+            \( -iname 'GameForge_V71_2D_RPG_FINAL_MAX_INTERNAL.zip' -o -iname 'GameForge_v71_2D_RPG_FINAL_MAX_INTERNAL.zip' -o -iname 'GameForge*V71*2D*RPG*FINAL*MAX*INTERNAL*.zip' \) \
             -print -quit || true)"
           if [[ -n "$ZIP" ]]; then
             echo "Using source archive: $ZIP"
             unzip -tq "$ZIP"
             unzip -q "$ZIP" -d build_source
           elif [[ -f "settings.gradle.kts" && -d "app" ]]; then
-            echo "No V6.1 archive found; repository root already contains the Gradle source."
+            echo "No V7 archive found; repository root already contains the Gradle source."
             rsync -a --exclude='.git' --exclude='build_source' ./ build_source/
           else
-            echo 'ERROR: No GameForge V6.1 ZIP and no direct Gradle source checkout found.' >&2
+            echo 'ERROR: No GameForge V7 ZIP and no direct Gradle source checkout found.' >&2
             exit 1
           fi
 
@@ -53,14 +53,14 @@ jobs:
           PROJECT_DIR="$(dirname "$SETTINGS_FILE")"
           test -f "$PROJECT_DIR/app/build.gradle.kts"
           test -f "$PROJECT_DIR/VERSION.txt"
-          test -f "$PROJECT_DIR/tools/audit_v6.py"
+          test -f "$PROJECT_DIR/tools/audit_v7.py"
           test -f "$PROJECT_DIR/.github/workflows/build-apk.yml" || true
 
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
           echo "Prepared source root: $PROJECT_DIR"
 
       - name: Set up JDK 17
-        uses: actions/setup-java@v5
+        uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: '17'
@@ -77,7 +77,7 @@ jobs:
           gradle-version: '8.13'
           cache-provider: basic
 
-      - name: Validate local swarm and V6.1 release metadata
+      - name: Validate V71 internal-only release metadata, memory safety and deep audits
         working-directory: ${{ env.PROJECT_DIR }}
         run: |
           set -euo pipefail
@@ -85,13 +85,37 @@ jobs:
           python3 tools/check_jvm_targets.py .
           python3 tools/check_kotlin_compat.py .
           python3 tools/check_native_api.py .
-          python3 tools/audit_v6.py
+          python3 tools/check_inapp_features.py .
+          python3 tools/check_memory_safety.py .
+          python3 tools/audit_v7.py
 
-      - name: Build GameForge V6.1 debug APK
+      - name: Validate source inventory and workflow inputs
         working-directory: ${{ env.PROJECT_DIR }}
         run: |
           set -euo pipefail
-          gradle --no-daemon --stacktrace :app:assembleDebug
+          python3 -m compileall -q tools
+          python3 - <<'PY'
+          from pathlib import Path
+          import re, xml.etree.ElementTree as ET
+          root = Path('.')
+          layout = root / 'app/src/main/res/layout/activity_main.xml'
+          xml = ET.parse(layout).getroot()
+          ids = {v for e in xml.iter() for k,v in e.attrib.items() if k.endswith('}id') or k == 'android:id'}
+          refs = set()
+          for p in (root / 'app/src/main/java').rglob('*.kt'):
+              refs.update(re.findall(r'R\.id\.([A-Za-z0-9_]+)', p.read_text(encoding='utf-8', errors='replace')))
+          missing = sorted(x for x in refs if '@+id/' + x not in ids and '@id/' + x not in ids)
+          assert not missing, 'missing layout IDs: ' + ', '.join(missing)
+          assert not list((root/'app/src/main').rglob('*AccessibilityService*')), 'accessibility source remains'
+          assert not list((root/'app/src/main').rglob('*ScreenCaptureService*')), 'screen capture source remains'
+          print(f'source inventory/input validation: PASS ({len(refs)} referenced view IDs)')
+          PY
+
+      - name: Build GameForge V71 debug APK
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: |
+          set -euo pipefail
+          gradle --no-daemon --stacktrace --warning-mode all :app:assembleDebug
 
       - name: Verify APK and checksum
         working-directory: ${{ env.PROJECT_DIR }}
@@ -102,11 +126,19 @@ jobs:
           sha256sum "$APK" | tee app-debug.sha256
           unzip -t "$APK" >/tmp/apk-unzip-check.txt
           test -s /tmp/apk-unzip-check.txt
+          command -v aapt >/dev/null
+          aapt dump badging "$APK" >/tmp/apk-badging.txt
+          grep -q "package: name='com.husain.aicoder'" /tmp/apk-badging.txt
+          grep -q "versionCode='71'" /tmp/apk-badging.txt
+          if aapt dump permissions "$APK" | grep -E 'BIND_ACCESSIBILITY_SERVICE|FOREGROUND_SERVICE_MEDIA_PROJECTION'; then
+            echo 'ERROR: forbidden device-capture permission leaked into APK' >&2
+            exit 1
+          fi
 
-      - name: Upload GameForge V6.1 debug APK
+      - name: Upload GameForge V71 debug APK
         uses: actions/upload-artifact@v7
         with:
-          name: gameforge-v61-2d-rpg-max-debug-apk
+          name: gameforge-v71-2d-rpg-final-max-internal-debug-apk
           path: |
             ${{ env.PROJECT_DIR }}/app/build/outputs/apk/debug/app-debug.apk
             ${{ env.PROJECT_DIR }}/app-debug.sha256
